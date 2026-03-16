@@ -19,7 +19,7 @@ from telegram.ext import (
 )
 
 from storage import save_capture
-from extractors import ocr_from_image, extract_urls, fetch_page_title
+from extractors import ocr_from_image, extract_urls, fetch_page_title, summarize_url
 
 load_dotenv()
 
@@ -66,21 +66,32 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     urls = extract_urls(text)
 
     if urls:
-        # It's a link share
         url = urls[0]
-        title = fetch_page_title(url)
-        save_capture(
-            capture_type="link",
-            raw_text=text,
-            extracted_text=title,
-            source_url=url,
-        )
-        label = f'"{title}"' if title else url
-        await update.message.reply_text(f"🔗 Captured link: {label}")
+        # Strip the URL from the text to get surrounding content
+        surrounding = text.replace(url, "").strip()
+
+        if len(surrounding) > 50:
+            # Paragraph + link — the text is the insight, link is just the source
+            save_capture(
+                capture_type="text",
+                raw_text=surrounding,
+                source_url=url,
+            )
+            await update.message.reply_text("📝 Captured note with source link.")
+        else:
+            # Just a link — fetch and summarize
+            await update.message.reply_text("🔗 Fetching and summarizing...")
+            summary = summarize_url(url)
+            save_capture(
+                capture_type="link",
+                raw_text=text,
+                extracted_text=summary,
+                source_url=url,
+            )
+            await update.message.reply_text(f"🔗 Captured.\n\n{summary}")
     else:
         # Plain text / quote / thought
         save_capture(capture_type="text", raw_text=text)
-        # Short confirmation — don't be annoying
         if len(text) > 200:
             await update.message.reply_text("📝 Captured long note.")
         else:
