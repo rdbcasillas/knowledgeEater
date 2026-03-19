@@ -5,6 +5,8 @@ Each capture becomes a row: timestamp | type | raw_text | extracted_text | sourc
 
 import gspread
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 from datetime import datetime, timedelta
 import json
 import os
@@ -33,6 +35,31 @@ def get_sheet():
         )
 
     return worksheet
+
+
+def upload_to_drive(image_path: str, filename: str) -> str:
+    """Upload an image to Google Drive and return a direct-view URL."""
+    creds_file = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+    creds = Credentials.from_service_account_file(creds_file, scopes=SCOPES)
+    service = build("drive", "v3", credentials=creds)
+
+    file_metadata = {"name": filename}
+    media = MediaFileUpload(image_path, mimetype="image/jpeg")
+    uploaded = service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields="id",
+    ).execute()
+
+    file_id = uploaded.get("id")
+
+    # Make it publicly readable
+    service.permissions().create(
+        fileId=file_id,
+        body={"type": "anyone", "role": "reader"},
+    ).execute()
+
+    return f"https://drive.google.com/uc?id={file_id}"
 
 
 def save_capture(

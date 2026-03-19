@@ -21,40 +21,62 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = "llama-3.3-70b-versatile"
 DIGEST_DAYS = int(os.getenv("DIGEST_DAYS", "7"))
 
+TYPE_ICON = {
+    "link": "🔗",
+    "image": "📷",
+    "text": "📝",
+    "voice": "🎤",
+    "document": "📄",
+    "forwarded": "↩️",
+}
+
+
+def fmt_timestamp(ts: str) -> str:
+    try:
+        dt = datetime.fromisoformat(ts)
+        return dt.strftime("%b %d, %I:%M %p")
+    except Exception:
+        return ts
+
 
 def build_digest_prompt(captures: list[dict]) -> str:
     entries = []
     for i, c in enumerate(captures, 1):
-        parts = [f"#{i} [{c.get('type', '?')}] — {c.get('timestamp', '?')}"]
+        parts = [f"CAPTURE {i} [{c.get('type', '?').upper()}]"]
         raw = c.get("raw_text", "").strip()
         extracted = c.get("extracted_text", "").strip()
         url = c.get("source_url", "").strip()
-        tags = c.get("tags", "").strip()
         if raw:
-            parts.append(f"  Content: {raw}")
+            parts.append(f"Content: {raw[:800]}")
         if extracted and extracted != raw:
-            parts.append(f"  Extracted: {extracted}")
+            parts.append(f"Extracted: {extracted[:800]}")
         if url:
-            parts.append(f"  URL: {url}")
-        if tags:
-            parts.append(f"  Tags: {tags}")
+            parts.append(f"URL: {url}")
         entries.append("\n".join(parts))
 
-    captures_text = "\n\n".join(entries)
+    captures_text = "\n\n---\n\n".join(entries)
 
-    return f"""You are a personal knowledge assistant. The user has captured the following items recently.
+    return f"""You are summarizing a personal knowledge capture log. The user saves links, book excerpts, screenshots, and notes for later review.
 
-For each capture, write a brief, honest summary of what it is and what it's about — based only on the information provided.
-If a capture doesn't contain enough context to say much, just say so plainly. Do not invent context, force insights, or speculate about why it was saved.
-Go through each capture one by one. No themes, no cross-connections, no questions.
+For each capture below, write a short, honest summary. Format each one exactly like this:
+
+CAPTURE 1
+<2-3 plain sentences describing what this is and what it's about. No bullet points, no headers. Just prose.>
+
+CAPTURE 2
+<summary>
+
+...and so on.
+
+Rules:
+- Only use information that is actually present in the capture. Do not invent or infer.
+- If there isn't enough information, write: "Not enough context to summarize."
+- Do not editorialize, find connections, or add opinions.
+- Keep each summary to 2-3 sentences maximum.
 
 Here are the {len(captures)} captures:
 
----
 {captures_text}
----
-
-For each one, write 2-4 sentences max. Be direct and honest. If you don't have enough information, say "Not enough context to summarize."
 """
 
 
@@ -76,19 +98,36 @@ def call_groq(prompt: str) -> str:
     return response.json()["choices"][0]["message"]["content"]
 
 
+def parse_summaries(digest: str, count: int) -> list[str]:
+    """Parse the LLM output into a list of per-capture summaries."""
+    summaries = [""] * count
+    current = None
+    buffer = []
+
+    for line in digest.strip().split("\n"):
+        stripped = line.strip()
+        if stripped.upper().startswith("CAPTURE "):
+            if current is not None and current <= count:
+                summaries[current - 1] = " ".join(buffer).strip()
+            try:
+                current = int(stripped.split()[1])
+                buffer = []
+            except (IndexError, ValueError):
+                pass
+        elif current is not None and stripped:
+            buffer.append(stripped)
+
+    if current is not None and current <= count:
+        summaries[current - 1] = " ".join(buffer).strip()
+
+    return summaries
+
+
 def build_html(captures: list[dict], digest: str, days: int) -> str:
     date_str = datetime.now().strftime("%B %d, %Y")
+    summaries = parse_summaries(digest, len(captures))
 
-    # Convert digest text to simple HTML paragraphs
-    digest_html = ""
-    for line in digest.strip().split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("#"):
-            digest_html += f"<h3>{line.lstrip('#').strip()}</h3>\n"
-        else:
-            digest_html += f"<p>{line}</p>\n"
+    cards = "".join(_capture_card(c, summaries[i]) for i, c in enumerate(captures))
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -96,81 +135,146 @@ def build_html(captures: list[dict], digest: str, days: int) -> str:
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Knowledge Digest — {date_str}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
   <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
-      font-family: Georgia, serif;
-      max-width: 720px;
-      margin: 48px auto;
-      padding: 0 24px;
+      font-family: 'Inter', sans-serif;
+      background: #f4f1eb;
       color: #1a1a1a;
-      line-height: 1.7;
-      background: #fafaf8;
+      padding: 40px 20px 80px;
+    }}
+    .page {{
+      max-width: 680px;
+      margin: 0 auto;
     }}
     header {{
-      border-bottom: 2px solid #e0e0e0;
-      padding-bottom: 16px;
-      margin-bottom: 32px;
+      margin-bottom: 40px;
     }}
-    h1 {{ font-size: 1.6rem; margin: 0 0 4px; }}
-    .meta {{ color: #666; font-size: 0.9rem; }}
-    h2 {{ font-size: 1.15rem; margin-top: 40px; color: #333; }}
-    h3 {{ font-size: 1rem; color: #444; margin-top: 24px; }}
-    p {{ margin: 8px 0; }}
-    .capture {{
+    .header-label {{
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #888;
+      margin-bottom: 6px;
+    }}
+    h1 {{
+      font-family: 'Lora', serif;
+      font-size: 2rem;
+      font-weight: 600;
+      color: #111;
+      line-height: 1.2;
+    }}
+    .header-meta {{
+      margin-top: 10px;
+      font-size: 0.85rem;
+      color: #888;
+    }}
+    .divider {{
+      height: 1px;
+      background: #ddd;
+      margin: 32px 0;
+    }}
+    .card {{
       background: #fff;
-      border: 1px solid #e8e8e8;
-      border-radius: 8px;
-      padding: 16px 20px;
+      border-radius: 12px;
+      padding: 20px 24px;
       margin-bottom: 16px;
+      border: 1px solid #e4e0d8;
     }}
-    .capture-meta {{ font-size: 0.8rem; color: #888; margin-bottom: 6px; }}
-    .capture-content {{ font-size: 0.95rem; }}
-    .tag {{
-      display: inline-block;
-      background: #f0f0f0;
+    .card-header {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }}
+    .type-badge {{
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 3px 8px;
       border-radius: 4px;
-      padding: 2px 8px;
-      font-size: 0.75rem;
-      color: #555;
-      margin-right: 4px;
     }}
+    .badge-link    {{ background: #e8f0fe; color: #3b5bdb; }}
+    .badge-image   {{ background: #e6fcf5; color: #0ca678; }}
+    .badge-text    {{ background: #fff9db; color: #e67700; }}
+    .badge-voice   {{ background: #f3f0ff; color: #7048e8; }}
+    .badge-document {{ background: #fff0f6; color: #c2255c; }}
+    .badge-forwarded {{ background: #f1f3f5; color: #495057; }}
+    .card-time {{
+      font-size: 0.75rem;
+      color: #aaa;
+      margin-left: auto;
+    }}
+    .card-summary {{
+      font-family: 'Lora', serif;
+      font-size: 1rem;
+      line-height: 1.7;
+      color: #222;
+    }}
+    .card-url {{
+      margin-top: 12px;
+      font-size: 0.78rem;
+    }}
+    .card-url a {{
+      color: #3b5bdb;
+      text-decoration: none;
+      word-break: break-all;
+    }}
+    .card-url a:hover {{ text-decoration: underline; }}
+    .no-summary {{ color: #aaa; font-style: italic; font-size: 0.9rem; }}
+    .card-image {{ margin-top: 12px; }}
+    .card-image img {{ max-width: 100%; border-radius: 8px; border: 1px solid #e4e0d8; }}
   </style>
 </head>
 <body>
-  <header>
-    <h1>Knowledge Digest</h1>
-    <div class="meta">{date_str} &nbsp;·&nbsp; {len(captures)} captures from the last {days} days</div>
-  </header>
+  <div class="page">
+    <header>
+      <div class="header-label">Knowledge Digest</div>
+      <h1>{date_str}</h1>
+      <div class="header-meta">{len(captures)} captures from the last {days} days</div>
+    </header>
 
-  <h2>Summary</h2>
-  {digest_html}
+    <div class="divider"></div>
 
-  <h2>Captures</h2>
-  {"".join(_capture_card(c) for c in captures)}
+    {cards}
+  </div>
 </body>
 </html>"""
 
 
-def _capture_card(c: dict) -> str:
-    ctype = c.get("type", "?")
-    ts = c.get("timestamp", "")
-    raw = c.get("raw_text", "").strip()
-    extracted = c.get("extracted_text", "").strip()
+def _capture_card(c: dict, summary: str) -> str:
+    ctype = c.get("type", "text").lower()
+    icon = TYPE_ICON.get(ctype, "📎")
+    ts = fmt_timestamp(c.get("timestamp", ""))
     url = c.get("source_url", "").strip()
-    tags = c.get("tags", "").strip()
 
-    content = extracted or raw or "<em>No content</em>"
-    if len(content) > 400:
-        content = content[:400] + "…"
+    badge_class = f"badge-{ctype}" if ctype in ("link", "image", "text", "voice", "document", "forwarded") else "badge-text"
 
-    url_html = f'<div><a href="{url}" target="_blank">{url}</a></div>' if url else ""
-    tags_html = "".join(f'<span class="tag">{t.strip()}</span>' for t in tags.split(",") if t.strip()) if tags else ""
+    summary_html = (
+        f'<div class="card-summary">{summary}</div>'
+        if summary
+        else '<div class="no-summary">Not enough context to summarize.</div>'
+    )
 
-    return f"""  <div class="capture">
-    <div class="capture-meta">{ctype.upper()} &nbsp;·&nbsp; {ts} {tags_html}</div>
-    <div class="capture-content">{content}</div>
-    {url_html}
-  </div>
+    if url and "drive.google.com/uc" in url:
+        url_html = f'<div class="card-image"><img src="{url}" alt="captured image"></div>'
+    elif url:
+        url_html = f'<div class="card-url"><a href="{url}" target="_blank">{url}</a></div>'
+    else:
+        url_html = ""
+
+    return f"""    <div class="card">
+      <div class="card-header">
+        <span class="type-badge {badge_class}">{icon} {ctype}</span>
+        <span class="card-time">{ts}</span>
+      </div>
+      {summary_html}
+      {url_html}
+    </div>
 """
 
 
