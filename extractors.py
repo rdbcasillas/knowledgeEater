@@ -73,8 +73,30 @@ def fetch_article_text(url: str) -> str:
         return ""
 
 
+def fetch_wikipedia_summary(url: str) -> str:
+    """Use Wikipedia's REST API to get a clean article summary."""
+    try:
+        match = re.search(r"wikipedia\.org/wiki/(.+)", url)
+        if not match:
+            return ""
+        title = match.group(1).split("#")[0]
+        api_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
+        resp = httpx.get(api_url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("extract", "")[:1000]
+    except Exception:
+        return ""
+
+
 def summarize_url(url: str) -> str:
     """Fetch article content and summarize it via Groq."""
+    # Wikipedia: use their own API, no scraping needed
+    if "wikipedia.org/wiki/" in url:
+        summary = fetch_wikipedia_summary(url)
+        if summary:
+            return summary
+
     if not GROQ_API_KEY:
         return fetch_page_title(url)
 
