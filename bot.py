@@ -109,8 +109,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file = await context.bot.get_file(photo.file_id)
         await file.download_to_drive(tmp.name)
         extracted = ocr_from_image(tmp.name)
-        filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-        drive_url = upload_to_drive(tmp.name, filename)
+        try:
+            filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+            drive_url = upload_to_drive(tmp.name, filename)
+        except Exception as e:
+            logger.warning(f"Drive upload failed: {e}")
+            drive_url = ""
         os.unlink(tmp.name)
 
     save_capture(

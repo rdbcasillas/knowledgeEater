@@ -40,10 +40,13 @@ def get_sheet():
 def upload_to_drive(image_path: str, filename: str) -> str:
     """Upload an image to Google Drive and return a direct-view URL."""
     creds_file = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
     creds = Credentials.from_service_account_file(creds_file, scopes=SCOPES)
     service = build("drive", "v3", credentials=creds)
 
     file_metadata = {"name": filename}
+    if folder_id:
+        file_metadata["parents"] = [folder_id]
     media = MediaFileUpload(image_path, mimetype="image/jpeg")
     uploaded = service.files().create(
         body=file_metadata,
