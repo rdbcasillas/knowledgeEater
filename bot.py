@@ -19,7 +19,7 @@ from telegram.ext import (
     filters,
 )
 
-from storage import save_capture, upload_to_drive
+from storage import save_capture
 from extractors import ocr_from_image, extract_urls, fetch_page_title, summarize_url
 
 load_dotenv()
@@ -109,19 +109,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file = await context.bot.get_file(photo.file_id)
         await file.download_to_drive(tmp.name)
         extracted = ocr_from_image(tmp.name)
-        try:
-            filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-            drive_url = upload_to_drive(tmp.name, filename)
-        except Exception as e:
-            logger.warning(f"Drive upload failed: {e}")
-            drive_url = ""
         os.unlink(tmp.name)
 
     save_capture(
         capture_type="image",
         raw_text=caption,
         extracted_text=extracted,
-        source_url=drive_url,
     )
 
     if extracted and len(extracted) > 20:
